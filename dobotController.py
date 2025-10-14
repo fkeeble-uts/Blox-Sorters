@@ -1,127 +1,138 @@
 #!/usr/bin/env python3
 import time
 import roslibpy
-import numpy as np
+import threading
+from spatialmath import SE3
 from math import pi
 
-current_pos = None
+current_pose = None
 
 # --- Dobot Magician gripper helpers (roslibpy) ---
-# Verify the message type once with:
-#   rostopic info /dobot_magician/target_tool_state
-# If it reports std_msgs/Int8MultiArray, change TOOL_MSG_TYPE accordingly.
 TOOL_TOPIC = '/dobot_magician/target_tool_state'
-TOOL_MSG_TYPE = 'std_msgs/Int32MultiArray'   # or 'std_msgs/Int8MultiArray'
+TOOL_MSG_TYPE = 'std_msgs/Int32MultiArray'  # or 'std_msgs/Int8MultiArray'
 
 def _tool_topic(client):
     return roslibpy.Topic(client, TOOL_TOPIC, TOOL_MSG_TYPE)
 
 def dobot_gripper_set(client, pump: int, grip: int):
-    """Publish [pump, grip] to the tool state.
-       pump: 0=off, 1=on
-       grip: 0=open, 1=close
-    """
     topic = _tool_topic(client)
     topic.advertise()
     topic.publish(roslibpy.Message({'data': [int(pump), int(grip)]}))
     topic.unadvertise()
 
 def dobot_gripper_open(client):
-    """Pump ON, gripper OPEN — handy before picking or to release while keeping vacuum ready."""
     dobot_gripper_set(client, 1, 0)
 
 def dobot_gripper_close(client):
-    """Pump ON, gripper CLOSE — grasp an object."""
     dobot_gripper_set(client, 1, 1)
 
 def dobot_gripper_release(client):
-    """Pump OFF, gripper OPEN — fully release and stop the pump."""
     dobot_gripper_set(client, 0, 0)
 
-#-----------------------------------------------------------------
+# -----------------------------------------------------------------
+# --- End-effector pose subscriber and monitor ---
 
-def call_service(client, service_name):
-    """Call a std_srvs/Trigger service and print the response."""
-    service = roslibpy.Service(client, service_name, 'std_srvs/Trigger')
-    request = roslibpy.ServiceRequest({})  # Trigger service takes no arguments
+def end_effector_pose_cb(message):
+    """Callback for /dobot_magician/end_effector_poses topic."""
+    global current_pose
+    # Extract pose data from message
+    pose = message['pose']
+    pos = pose['position']
+    ori = pose['orientation']
 
-    print(f"[ROS] Calling service: {service_name}")
-    result = service.call(request)
-    print(f"[ROS] Response: success={result['success']}, message='{result['message']}'")
+    current_pose = {
+        'x': pos['x'],
+        'y': pos['y'],
+        'z': pos['z'],
+        'qx': ori['x'],
+        'qy': ori['y'],
+        'qz': ori['z'],
+        'qw': ori['w'],
+    }
 
-def joint_state_cb(message):
-    global current_pos
-    # The JointState message contains 'position' array
-    current_pos = list(message['position'])
+def print_pose(pose):
+    """Prints position + orientation (converted to Euler)."""
+    try:
+        # Construct SE3 from quaternion + translation
+        T = SE3.Quaternion([pose['qw'], pose['qx'], pose['qy'], pose['qz']], t=[pose['x'], pose['y'], pose['z']])
+        eul = T.rpy('deg')
+        print(f"[POSE] Position (m): x={pose['x']:.3f}, y={pose['y']:.3f}, z={pose['z']:.3f}")
+        print(f"[POSE] Orientation (deg): roll={eul[0]:.1f}, pitch={eul[1]:.1f}, yaw={eul[2]:.1f}")
+        print("-" * 50)
+    except Exception as e:
+        print(f"[POSE ERROR] {e}")
+
+def start_pose_monitor(interval=0.5):
+    """Thread that prints the latest end-effector pose every `interval` seconds."""
+    def monitor():
+        while True:
+            if current_pose:
+                print_pose(current_pose)
+            time.sleep(interval)
+    thread = threading.Thread(target=monitor, daemon=True)
+    thread.start()
+
+# -----------------------------------------------------------------
 
 def move_dobot_joint_positions(client, joint_positions):
-    """
-    Publish a single JointTrajectoryPoint to /dobot_magician/target_joint_states.
-    joint_positions: iterable of 4 floats (radians) → [j1, j2, j3, j4]
-    """
-    if len(joint_positions) != 4:
-        raise ValueError(f"Dobot expects 4 joints, got {len(joint_positions)}")
-
+    """Send one JointTrajectoryPoint to /dobot_magician/target_joint_states."""
     pub = roslibpy.Topic(client,
                          '/dobot_magician/target_joint_states',
                          'trajectory_msgs/JointTrajectory')
     pub.advertise()
-
-    # Minimal message (matches the MATLAB example: just one point with Positions)
-    msg = {
-        # joint_names is optional for this driver; include if your setup requires it:
-        # 'joint_names': ['joint_1', 'joint_2', 'joint_3', 'joint_4'],
-        'points': [
-            {
-                'positions': [float(x) for x in joint_positions]
-                # No time_from_start → driver executes immediately (same as MATLAB snippet)
-            }
-        ]
-    }
-
+    msg = {'points': [{'positions': [float(x) for x in joint_positions]}]}
     pub.publish(roslibpy.Message(msg))
     pub.unadvertise()
 
+# -----------------------------------------------------------------
 
 if __name__ == '__main__':
-    client = roslibpy.Ros(host='10.42.0.1', port=9090)  # Replace with your ROS bridge IP
+    client = roslibpy.Ros(host='10.42.0.1', port=9090)
     client.run()
+
+    # Subscribe to end effector pose
+    sub_pose = roslibpy.Topic(client, '/dobot_magician/end_effector_poses', 'geometry_msgs/PoseStamped')
+    sub_pose.subscribe(end_effector_pose_cb)
+
+    # Start periodic pose printing
+    start_pose_monitor(interval=0.5)
+
+    steps = 10
+
     try:
-        # Example: open gripper, move, close gripper
-
-        # move to a joint position
-        target_joint_positions = [0.0, 0.80, 0.30, 0.0]
-        move_dobot_joint_positions(client, target_joint_positions)
+        # Example sequence
+        move_dobot_joint_positions(client, [1.5, pi/6, 0.3, 0.0])
+        #for i in range(steps):
+            #move_dobot_joint_positions(client, [-i/steps * pi/3, pi/6-i/steps * pi/3, 0.3, 0.0])
+        #for i in range(steps):
+            #move_dobot_joint_positions(client, [-pi/3 + i/steps * pi/3, pi/6 - pi/3 - i/steps * pi/3, 0.3, 0.0])
+        #for i in range(steps):
+            #move_dobot_joint_positions(client, [i/steps * pi/3, pi/6 - 2*pi/3 + i/steps * pi/3, 0.3, 0.0])
+        #for i in range(steps):
+            #move_dobot_joint_positions(client, [pi/3 - i/steps * pi/3, pi/6 -pi/3 + i/steps * pi/3, 0.3, 0.0])
         time.sleep(2)
 
-
-        # Open gripper
         dobot_gripper_open(client)
         time.sleep(2)
 
-        # Close gripper
         dobot_gripper_close(client)
         time.sleep(2)
 
         dobot_gripper_release(client)
         time.sleep(2)
 
-        # move to a joint position
-        target_joint_positions = [0.0, 0.40, 0.30, 0.0]
-        move_dobot_joint_positions(client, target_joint_positions)
+        move_dobot_joint_positions(client, [pi/2, 0.4, 0.3, 0.0])
         time.sleep(2)
 
-        # Open gripper
         dobot_gripper_open(client)
         time.sleep(2)
 
-        # Close gripper
         dobot_gripper_close(client)
         time.sleep(2)
 
         dobot_gripper_release(client)
         time.sleep(2)
-        
 
     except KeyboardInterrupt:
         print("\n[APP] Interrupted by user.")
+        sub_pose.unsubscribe()
