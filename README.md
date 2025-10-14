@@ -23,15 +23,11 @@ git push origin main
 
 This guide shows how to SSH into your Raspberry Pi with **PuTTY**
 
----
-
 ## Network & Login
 
 - **Pi IP:** `10.42.0.1`  
 - **Username:** `ubuntu`  
 - **Password:** `ubuntu`
-
----
 
 ## 1) Connect with PuTTY (Windows)
 
@@ -43,8 +39,6 @@ This guide shows how to SSH into your Raspberry Pi with **PuTTY**
    login as: ubuntu
    password: ubuntu
    ```
-
----
 
 ## 2) Ensure a Single ROS Master (free port 11311)
 
@@ -61,12 +55,9 @@ sudo fuser -n tcp 11311
 sudo fuser -k 11311/tcp
 ```
 
----
-
 ## 3) Launch the Dobot Driver (ROS1 Noetic)
 
 ```bash
 roslaunch dobot_magician_driver dobot_magician.launch
 ```
 
----
