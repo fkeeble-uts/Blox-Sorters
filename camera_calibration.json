@@ -1,0 +1,10 @@
+{
+    "depth_range_mm": [
+        250,
+        273
+    ],
+    "min_area": 4000,
+    "max_area": 6000,
+    "min_rectangularity": 0.5,
+    "validated": true
+}
