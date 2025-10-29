@@ -13,6 +13,7 @@ import numpy as np
 import cv2
 import roslibpy
 from pathlib import Path
+import math
 
 # Import from existing modules
 from transform_camera_to_robot import transform_camera_to_robot, load_transformation_config
@@ -26,10 +27,10 @@ from dobot_control import (
 
 # Import from renamed files
 try:
-    import working_robot_calibration as robot_cal
-    import calibration as block_det
+    import robot_calibrator as robot_cal
+    import camera_calibrator as block_det
 except ImportError as e:
-    print(f"❌ Import Error: {e}")
+    print(f" Import Error: {e}")
     print("\nPlease ensure these files exist:")
     print("  - robot_calibration.py")
     print("  - block_detection.py")
@@ -44,8 +45,8 @@ BLOCKS_FILE = 'blocks.json'
 DOBOT_IP = '10.42.0.1'
 DOBOT_PORT = 9090
 
-SAFE_Z_HEIGHT_M = 0.05
-GRIP_Z_HEIGHT_M = -0.03
+SAFE_Z_HEIGHT_M = 0.03
+GRIP_Z_HEIGHT_M = -0.022
 DROP_LOCATION_MM = (-175.0,-75)
 SAFE_LOCATION_MM = (-50,-50)
 DROP_HEIGHT_M = 0.05
@@ -56,17 +57,17 @@ DROP_HEIGHT_M = 0.05
 # ROBOT MOVEMENT FUNCTIONS
 # ============================================================================
 
-def go_to_transformed_pose(client, cam_x_mm, cam_y_mm, z_m, rpy_radians=(0.0, 0.0, 0.0)):
+def go_to_transformed_pose(client, cam_x_mm, cam_y_mm, z_m, rpy_radians):
     """Transforms camera coordinates to robot coordinates and sends move command"""
     print(f"--- Transforming Camera Target ({cam_x_mm:.2f}mm, {cam_y_mm:.2f}mm)")
 
     try:
         rob_x_m, rob_y_m = transform_camera_to_robot(cam_x_mm, cam_y_mm)
     except FileNotFoundError as e:
-        print(f"❌ Error: {e}")
+        print(f" Error: {e}")
         return False
     except ValueError as e:
-        print(f"❌ Error during transformation: {e}")
+        print(f" Error during transformation: {e}")
         return False
 
     target_pose = [rob_x_m, rob_y_m, z_m]
@@ -81,14 +82,17 @@ def go_to_transformed_pose(client, cam_x_mm, cam_y_mm, z_m, rpy_radians=(0.0, 0.
     return True
 
 
-def autonomous_pick_and_place(client, cam_x_mm, cam_y_mm, drop_x_mm, drop_y_mm):
+def autonomous_pick_and_place(client, cam_x_mm, cam_y_mm, drop_x_mm, drop_y_mm, block_angle_rad):
     """Executes a full pick and place cycle for a single target"""
     print("\n" + "="*50)
-    print(f"STARTING PICK CYCLE: Cam Target ({cam_x_mm:.0f}, {cam_y_mm:.0f})")
+    print(f"STARTING PICK CYCLE: Cam Target ({cam_x_mm:.0f}, {cam_y_mm:.0f}), Angle: {block_angle_rad:.2f} rad")
     print("="*50)
 
+    PICK_RPY = [block_angle_rad, -math.pi / 2.0, 0.0]
+    DROP_RPY = [0.0, -math.pi / 2.0, 0.0]
+
     # 1. Move to safe hover position
-    if not go_to_transformed_pose(client, cam_x_mm, cam_y_mm, SAFE_Z_HEIGHT_M):
+    if not go_to_transformed_pose(client, cam_x_mm, cam_y_mm, SAFE_Z_HEIGHT_M, rpy_radians=PICK_RPY):
         return
 
     # 2. Open Gripper
@@ -98,7 +102,7 @@ def autonomous_pick_and_place(client, cam_x_mm, cam_y_mm, drop_x_mm, drop_y_mm):
     
     # 3. Descend to grip height
     print("→ Descending to grip height")
-    if not go_to_transformed_pose(client, cam_x_mm, cam_y_mm, GRIP_Z_HEIGHT_M):
+    if not go_to_transformed_pose(client, cam_x_mm, cam_y_mm, GRIP_Z_HEIGHT_M, rpy_radians=PICK_RPY):
         return
     time.sleep(1.0)
 
@@ -109,7 +113,7 @@ def autonomous_pick_and_place(client, cam_x_mm, cam_y_mm, drop_x_mm, drop_y_mm):
 
     # 5. Lift to safe height
     print("→ Lifting to safe height")
-    if not go_to_transformed_pose(client, cam_x_mm, cam_y_mm, SAFE_Z_HEIGHT_M):
+    if not go_to_transformed_pose(client, cam_x_mm, cam_y_mm, SAFE_Z_HEIGHT_M, rpy_radians=PICK_RPY):
         return
 
     # # 6. Move to drop location
@@ -317,6 +321,72 @@ def calibration_wizard(client, camera_system):
     
     input("\nPress ENTER to continue...")
 
+    
+def recalibrate_camera_properly(client, camera_system):
+    """Properly recalibrate camera with full resource cleanup"""
+    print("\n" + "="*70)
+    print("CAMERA RECALIBRATION")
+    print("="*70)
+    
+    # Step 1: Stop camera feed thread
+    print("Stopping camera feed thread...")
+    camera_system['thread'].stop()
+    time.sleep(0.5)
+    
+    # Step 2: Stop pipeline
+    print("Releasing camera hardware...")
+    try:
+        camera_system['pipeline'].stop()
+    except Exception as e:
+        print(f"Warning during pipeline stop: {e}")
+    
+    # Step 3: Close all OpenCV windows
+    cv2.destroyAllWindows()
+    time.sleep(1.0)  # Give system time to release resources
+    
+    # Step 4: Launch diagnostic tool
+    print("\nLaunching diagnostic calibration tool...")
+    print("(This will open in a new window)")
+    
+    # Import here to ensure clean module state
+    import camera_calibrator as block_det
+    
+    try:
+        block_det.run_diagnostic_calibration()
+    except Exception as e:
+        print(f"Error during calibration: {e}")
+        import traceback
+        traceback.print_exc()
+    
+    # Step 5: Wait for diagnostic tool to finish
+    time.sleep(2.0)
+    
+    # Step 6: Reinitialize camera system
+    print("\nReinitializing camera system...")
+    try:
+        pipeline, align, depth_scale, config, detector = initialize_camera()
+        
+        camera_system['pipeline'] = pipeline
+        camera_system['align'] = align
+        camera_system['depth_scale'] = depth_scale
+        camera_system['config'] = config
+        camera_system['detector'] = detector
+        
+        # Step 7: Start new camera feed thread
+        camera_thread = CameraFeedThread(detector, config, pipeline, align, depth_scale)
+        camera_thread.start()
+        camera_system['thread'] = camera_thread
+        
+        print("✓ Camera recalibrated and reinitialized")
+        
+    except Exception as e:
+        print(f"✗ Failed to reinitialize camera: {e}")
+        import traceback
+        traceback.print_exc()
+        print("\nYou may need to restart the entire program.")
+    
+    input("\nPress ENTER to continue...")
+
 
 def initialize_camera():
     """Initialize camera system"""
@@ -325,10 +395,10 @@ def initialize_camera():
     config = block_det.load_calibration()
     if config is None:
         config = {
-            'depth_range_mm': [250, 273],
-            'min_area': 4000,
-            'max_area': 6000,
-            'min_rectangularity': 0.5,
+            'depth_range_mm': [270, 277],
+            'min_area': 1000,
+            'max_area': 4000,
+            'min_rectangularity': 0.7,
             'validated': False
         }
     
@@ -523,12 +593,15 @@ def autonomous_pick_place_workflow(client, camera_system):
                 print(f"{'='*70}")
                 
                 try:
-                    send_target_end_effector_pose(client, [0.2, 0.2, 0.03], rpy=(0.0, 0.0, 1.8))
+                    block_rotation_rad = block.get('angle_rad', 0.0)
                     time.sleep(2)
+
+                    send_target_end_effector_pose(client, [0.2, 0.2, 0.03], rpy=(0.0, 0.0, 1.8))
+                    time.sleep(4)
 
                     autonomous_pick_and_place(
                         client, block['x_mm'], block['y_mm'], 
-                        DROP_LOCATION_MM[0], DROP_LOCATION_MM[1]
+                        DROP_LOCATION_MM[0], DROP_LOCATION_MM[1], block_rotation_rad
                     )
 
                     send_target_end_effector_pose(client, [0.2, 0.2, 0.03], rpy=(0.0, 0.0, 1.8))
@@ -563,7 +636,7 @@ def autonomous_pick_place_workflow(client, camera_system):
                     time.sleep(1.0)
             
             print(f"\n{'='*70}")
-            print("✅ WORKFLOW COMPLETE")
+            print(" WORKFLOW COMPLETE")
             print(f"{'='*70}")
             input("Press ENTER...")
             
@@ -624,7 +697,7 @@ def main_menu(client, camera_system):
         
         if choice == '1':
             if not robot_cal_ok or not camera_cal_ok:
-                print("\n⚠️  Calibrations incomplete!")
+                print("\n  Calibrations incomplete!")
                 if input("Run wizard? (Y/n): ").strip().lower() != 'n':
                     calibration_wizard(client, camera_system)
                 continue
@@ -632,25 +705,7 @@ def main_menu(client, camera_system):
             autonomous_pick_place_workflow(client, camera_system)
             
         elif choice == '2':
-            camera_system['thread'].pause()
-            camera_system['pipeline'].stop()
-            cv2.destroyAllWindows()
-            
-            block_det.run_diagnostic_calibration()
-            
-            pipeline, align, depth_scale, config, detector = initialize_camera()
-            camera_system['pipeline'] = pipeline
-            camera_system['align'] = align
-            camera_system['depth_scale'] = depth_scale
-            camera_system['config'] = config
-            camera_system['detector'] = detector
-            
-            camera_system['thread'].stop()
-            camera_system['thread'] = CameraFeedThread(detector, config, pipeline, align, depth_scale)
-            camera_system['thread'].start()
-            
-            print("✓ Camera recalibrated")
-            input("Press ENTER...")
+            recalibrate_camera_properly(client, camera_system)
             
         elif choice == '3':
             robot_cal.collect_calibration_data(client)
@@ -713,7 +768,7 @@ def main():
         pipeline, align, depth_scale, config, detector = initialize_camera()
         print("✓ Camera initialized")
     except Exception as e:
-        print(f"❌ Camera failed: {e}")
+        print(f" Camera failed: {e}")
         client.terminate()
         sys.exit(1)
     
@@ -740,7 +795,7 @@ def main():
     time.sleep(1)
     
     if not robot_cal_ok or not camera_cal_ok:
-        print("\n⚠️  Incomplete calibrations")
+        print("\n  Incomplete calibrations")
         if input("Run wizard? (Y/n): ").strip().lower() != 'n':
             calibration_wizard(client, camera_system)
     

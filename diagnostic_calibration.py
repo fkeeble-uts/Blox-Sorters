@@ -9,30 +9,15 @@ def draw_camera_origin(image):
     center_x = W // 2
     center_y = H // 2
     
-    CENTER_COLOR = (255, 0, 255)  # Magenta for high visibility
-    LINE_LENGTH = 30 # Length of the axis lines in pixels
+    CENTER_COLOR = (255, 0, 255)
+    LINE_LENGTH = 30
     THICKNESS = 2
 
-    # Draw the exact center (origin)
     cv2.circle(image, (center_x, center_y), 5, CENTER_COLOR, -1)
-
-    # Draw the X-axis (Right is Positive X_C)
-    cv2.line(image, 
-             (center_x - LINE_LENGTH, center_y), 
-             (center_x + LINE_LENGTH, center_y), 
-             CENTER_COLOR, THICKNESS)
-
-    # Draw the Y-axis (Down is Positive Y_C)
-    cv2.line(image, 
-             (center_x, center_y - LINE_LENGTH), 
-             (center_x, center_y + LINE_LENGTH), 
-             CENTER_COLOR, THICKNESS)
-    
-    # Label the axes
-    cv2.putText(image, "X_C", (center_x + LINE_LENGTH + 5, center_y + 5), 
-                cv2.FONT_HERSHEY_SIMPLEX, 0.5, CENTER_COLOR, 1)
-    cv2.putText(image, "Y_C", (center_x + 5, center_y + LINE_LENGTH + 5), 
-                cv2.FONT_HERSHEY_SIMPLEX, 0.5, CENTER_COLOR, 1)
+    cv2.line(image, (center_x - LINE_LENGTH, center_y), (center_x + LINE_LENGTH, center_y), CENTER_COLOR, THICKNESS)
+    cv2.line(image, (center_x, center_y - LINE_LENGTH), (center_x, center_y + LINE_LENGTH), CENTER_COLOR, THICKNESS)
+    cv2.putText(image, "X_C", (center_x + LINE_LENGTH + 5, center_y + 5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, CENTER_COLOR, 1)
+    cv2.putText(image, "Y_C", (center_x + 5, center_y + LINE_LENGTH + 5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, CENTER_COLOR, 1)
 
 def main():
     pipeline = rs.pipeline()
@@ -44,10 +29,10 @@ def main():
     profile = pipeline.start(config)
     depth_scale = profile.get_device().first_depth_sensor().get_depth_scale()
     
-    min_depth_mm = 250
-    max_depth_mm = 273
-    min_area = 4000
-    max_area = 6000
+    min_depth_mm = 270
+    max_depth_mm = 277
+    min_area = 1000
+    max_area = 5000
     min_rect = 0.5
     
     try:
@@ -114,7 +99,6 @@ def main():
                         cv2.putText(final_debug, f"BLOCK {detected_count+1}", (cX-40, cY-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
                         detected_count += 1
             
-            # --- Draw the origin marker on the final view ---
             draw_camera_origin(final_debug)
             
             info_bg = np.zeros((100, 1920, 3), dtype=np.uint8)

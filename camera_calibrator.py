@@ -602,10 +602,10 @@ def main():
     profile = pipeline.start(config)
     depth_scale = profile.get_device().first_depth_sensor().get_depth_scale()
     
-    min_depth_mm = 250
-    max_depth_mm = 273
-    min_area = 4000
-    max_area = 6000
+    min_depth_mm = 270
+    max_depth_mm = 277
+    min_area = 1000
+    max_area = 5000
     min_rect = 0.5
     
     try:

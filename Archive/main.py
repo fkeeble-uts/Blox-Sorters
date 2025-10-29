@@ -11,7 +11,7 @@ import cv2
 
 # Import custom modules
 from Archive.camera_vision import VisionSystem
-from calibration import CameraCalibration, RobotCalibration
+from camera_calibrator import CameraCalibration, RobotCalibration
 from transform_camera_to_robot import transform_camera_to_robot
 from calibration_utils import run_interactive_calibration
 from dobot_control import (
